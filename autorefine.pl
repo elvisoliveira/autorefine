@@ -1,27 +1,28 @@
 package autorefine;
 
 use strict;
-use Plugins;
-use Settings;
-use Log qw(message warning);
-use Utils;
-use Globals;
-use Task;
-use Task::TalkNPC;
-use Data::Dumper;
 
-Plugins::register('autorefine', 'What do you think?', \&unload);
+use Utils;
+use Plugins;
+use Globals;
+use Settings;
+use Data::Dumper;
+use Task::TalkNPC;
+use Log qw(message warning);
+
+Plugins::register('autorefine', 'What do you think?', \&unLoad);
 
 my $time = time;
 my $delay = 3;
 my $hooks = Plugins::addHooks(
     ['AI_pre', \&onAI],
-    ['packet/unit_levelup', \&unitLevelup]
+    ['initialized', \&loadPlugin],
+    ['packet/unit_levelup', \&upgradeFeedback]
 );
 
 my ($item, $metal, $talkCallback, $startRefine, $talking, %npc);
 
-sub unload {
+sub unLoad {
     Plugins::delHooks($hooks);
 }
 sub onAI {
@@ -32,7 +33,7 @@ sub onAI {
                || !$config{"autoRefine_0_refineNpc"}
                || !$config{"autoRefine_0_refineStone"}
                || !$config{"autoRefine_0_npcSequence"});
-    return if (!main::timeOut($time, $delay)); selectItem() if (!$item);
+    return if (!main::timeOut($time, $delay)); selectItems() if (!$item);
     return if (!$item || !$metal);
 
     my ($upgrade, $plus) = $item->{name} =~ /(.){2}/;
@@ -54,7 +55,7 @@ sub onAI {
         message("Could not locate refinement NPC!\n", "info");
     } elsif($metal->{amount} < 1
             || $config{"autoRefine_0_zeny"} > $char->{zeny}) {
-        message("We have run out of zeny or metals to refine with!\n", "info");
+        message("We have run out of zeny or metals to refine with!\n", "info"); rebootItems();
     } elsif ($startRefine
              && $item->{equipped}
              && $item->{upgrade} < $config{"autoRefine_0_maxRefine"}) {
@@ -70,24 +71,28 @@ sub onAI {
              && $item->{equipped}
              && $item->{upgrade} >= $config{"autoRefine_0_maxRefine"}) {
         # Max refined reached, unequip it.
-        $item->unequip(); undef $item;
+        $item->unequip(); rebootItems();
     } else {
-        message("Something went wrong.\n", "info");
+        message("Something went wrong.\n", "info"); rebootItems();
     }
     $time = time;
-}
-sub selectItem {
-    $metal = $char->inventory->getByName($config{"autoRefine_0_refineStone"});
 
+}
+sub rebootItems {
+    undef $item;
+    undef $metal;
+}
+sub selectItems {
     for my $i (1..$config{"autoRefine_0_maxRefine"} - 1) {
         $item = $char->inventory->getByName("+$i " . $config{"autoRefine_0"});
         last if($item);
     }
 
-    $item = $char->inventory->getByName($config{"autoRefine_0"}) if (!$item);
-
-    undef $item if (!$item);
+    $metal = $char->inventory->getByName($config{"autoRefine_0_refineStone"}) if (!$metal);
     undef $metal if (!$metal);
+
+    $item = $char->inventory->getByName($config{"autoRefine_0"}) if (!$item);
+    undef $item if (!$item);
 
     ($npc{map}, $npc{x}, $npc{y}) = $config{"autoRefine_0_refineNpc"} =~ /^(.*) (.*) (.*)$/ if ($item && $metal);
     $npc{sequence} = $config{"autoRefine_0_npcSequence"} if ($item && $metal);
@@ -104,22 +109,25 @@ sub talkNPC {
     $talking = 1;
     $taskManager->add(Task::TalkNPC->new(x => $x, y => $y, sequence => $sequence));
 }
-sub unitLevelup {
+sub upgradeFeedback {
     my ($self, $args) = @_;
 
     my $ID = $args->{ID};
     my $type = $args->{type};
     my $actor = Actor::get($ID);
+    my $upgrade = "+" . $item->{upgrade};
 
     $talking = 0;
     if($actor->{ID} eq $char->{ID}) {
-        message("+" . $item->{upgrade} . " Upgraded :)\n", "success") if ($type eq 3);
+        message($upgrade . " Upgraded :)\n", "success") if ($type eq 3);
         if ($type eq 2) {
-            warning("+" . $item->{upgrade} . " Broke :(\n", "info"); undef $item;
+            warning($upgrade . " Broke :(\n", "info"); rebootItems();
         }
     }
-
-    # &debugger();
+}
+sub loadPlugin {
+    # Commands::run ("plugin reload autorefine");
+    Plugins::reload("autorefine");
 }
 sub debugger {
     my $datetime = localtime time;
